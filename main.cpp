@@ -51,7 +51,16 @@ std::string stringify( const in_addr& address, std::optional<in_addr> mask = std
 
     if ( mask ) {
 
-        uint32_t mask_int = ntohl( mask.value().S_un.S_addr );
+        #ifdef _WIN32
+
+            uint32_t mask_int = ntohl( mask.value().S_un.S_addr );
+
+        #else
+
+            uint32_t mask_int = ntohl( mask.value().s_addr );
+
+        #endif
+
         std::size_t i = 0;
 
         while ( mask_int ) {
@@ -123,21 +132,47 @@ class Config {
             const std::string network = config["network"].get<std::string>();
             const auto slash = network.find( '/' );
 
-            _network.S_un.S_addr = inet_addr( network.substr( 0, slash ).c_str() );
+            #ifdef _WIN32
+
+                _network.S_un.S_addr = inet_addr( network.substr( 0, slash ).c_str() );
+
+            #else
+
+                _network.s_addr = inet_addr( network.substr( 0, slash ).c_str() );
+
+            #endif
 
             _next = _network;
 
             _server = next_address();
 
-            std::size_t mask_bits = std::stol( network.substr( slash + 1 ) );
+            std::size_t mask_bits = std::stoul( network.substr( slash + 1 ) );
             if ( mask_bits < 0 || mask_bits > 32 ) throw std::invalid_argument( "Address mask must be 0-32 but is " + network.substr( slash + 1 ) );
-            _mask.S_un.S_addr = htonl( 0xFFFFFFFF << ( 32 - mask_bits ) );
+            
+            #ifdef _WIN32
+            
+                _mask.S_un.S_addr = htonl( 0xFFFFFFFF << ( 32 - mask_bits ) );
+
+            #else
+
+                _mask.s_addr = htonl( 0xFFFFFFFF << ( 32 - mask_bits ) );
+
+            #endif
 
         }
 
         in_addr next_address() const {
 
-            _next.S_un.S_addr = htonl( ntohl( _next.S_un.S_addr ) + 1 );
+            #ifdef _WIN32
+
+                _next.S_un.S_addr = htonl( ntohl( _next.S_un.S_addr ) + 1 );
+
+            #else
+
+                _next.s_addr = htonl( ntohl( _next.s_addr ) + 1 );
+
+            #endif
+
             return _next;
 
         }
@@ -302,16 +337,6 @@ class Peer {
 int main( const int argn, const char* argv[] ) {
 
 
-    const std::string help = "Usage: ./gen <config_json> <output_directory>";
-    if ( argn != 3 ) throw std::invalid_argument( help );
-
-    const std::filesystem::path input = argv[1];
-    if ( !std::filesystem::is_regular_file( input ) ) throw std::invalid_argument( help );
-
-    const std::filesystem::path output = argv[2];
-    if ( !std::filesystem::is_directory( output ) ) throw std::invalid_argument( help );
-
-
     if ( sodium_init() == -1 ) {
 
         std::cerr << "Błąd inicjalizacji libsodium" << std::endl;
@@ -319,6 +344,36 @@ int main( const int argn, const char* argv[] ) {
 
     }
 
+
+    const std::string help = std::string( "Usage: " ) + argv[0] + " <config_json> <output_directory>";
+    if ( argn != 3 ) {
+
+        std::cerr << "Error: Incorrect number of arguments." << std::endl;
+        std::cerr << help << std::endl;
+        
+        return EXIT_FAILURE;
+
+    }
+
+    const std::filesystem::path input = argv[1];
+    if ( !std::filesystem::is_regular_file( input ) ) {
+
+        std::cerr << "Error: Input is not a file." << std::endl;
+        std::cerr << help << std::endl;
+        
+        return EXIT_FAILURE;
+
+    }
+
+    const std::filesystem::path output = argv[2];
+    if ( !std::filesystem::is_directory( output ) ) {
+
+        std::cerr << "Error: Output is not a directory." << std::endl;
+        std::cerr << help << std::endl;
+        
+        return EXIT_FAILURE;
+
+    }
 
     const Config config( input );
 
@@ -340,11 +395,21 @@ int main( const int argn, const char* argv[] ) {
     file << "ListenPort = " << config.bind() << endline << endline;
 
     in_addr full_mask;
-    full_mask.S_un.S_addr = htonl( 0xFFFFFFFF );
+
+    #ifdef _WIN32
+
+        full_mask.S_un.S_addr = htonl( 0xFFFFFFFF );
+
+    #else
+
+        full_mask.s_addr = htonl( 0xFFFFFFFF );
+
+    #endif
 
     for ( const auto& peer : peers ) {
 
         file << "# " << peer.name() << endline;
+        file << "[Peer]" << endline;
         file << "PublicKey = " << base64( peer.keypair().public_key ) << endline;
         file << "AllowedIPs = " << stringify( peer.address(), full_mask ) << endline << endline;
 
@@ -361,6 +426,7 @@ int main( const int argn, const char* argv[] ) {
 
     }
 
+    
     return EXIT_SUCCESS;
 
 
